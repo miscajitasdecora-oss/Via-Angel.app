@@ -3,15 +3,17 @@ import requests
 from geopy.geocoders import Nominatim
 from urllib.parse import quote
 
-# 1. CONFIGURACIÓN
+# 1. CONFIGURACIÓN DE LA APP
 st.set_page_config(page_title="Via Angel App", page_icon="🚚")
 
+# 2. SISTEMA DE SEGURIDAD
 def check_password():
     if "password_correct" not in st.session_state:
         st.session_state["password_correct"] = False
+
     if not st.session_state["password_correct"]:
         st.title("🔐 Acceso Via Angel")
-        password_input = st.text_input("Ingresa la clave", type="password")
+        password_input = st.text_input("Ingresa la clave para entrar", type="password")
         if st.button("Entrar"):
             if password_input == "fletesmi": 
                 st.session_state["password_correct"] = True
@@ -22,24 +24,35 @@ def check_password():
     return True
 
 if check_password():
+    # --- BARRA LATERAL (SIDEBAR) ---
+    with st.sidebar:
+        st.header("Configuración de Ruta")
+        # Opción 3: Entrada manual de Peaje (Unitario)
+        peaje_unitario = st.number_input("Valor Peaje Unitario ($):", min_value=0, step=100, value=0, help="Escribe el valor de un peaje. La app lo multiplicará por 2 (ida y vuelta).")
+        
+        st.write("---")
+        if st.button("Cerrar Sesión"):
+            st.session_state["password_correct"] = False
+            st.rerun()
+
+    # --- INTERFAZ PRINCIPAL ---
     try:
         st.image("logoVA.jpeg", width=220)
     except:
-        st.info("💡 Sube 'logoVA.jpeg' a GitHub.")
+        st.info("💡 Sube 'logoVA.jpeg' a GitHub para ver tu logo.")
 
     st.title("Calculadora de Fletes Inteligente")
     st.markdown("---")
 
-    # --- VARIABLES DE NEGOCIO ---
+    # Variables de cobro
     DIRECCION_BASE = "Osvaldo Croquevielle 2207, Pudahuel, Chile"
     TARIFA_MINIMA = 15000
     VALOR_KM = 950
     VALOR_PESO_KG = 50
-    
-    # AJUSTE DE COMBUSTIBLE (Aquí está la magia)
     PRECIO_BENCINA = 1600 
-    RENDIMIENTO_N400 = 12 # Km por litro (promedio cargada)
+    RENDIMIENTO_N400 = 12 
 
+    # Entradas de texto principales
     destino = st.text_input("📍 Destino de entrega:", placeholder="Ej: San Diego 100, Santiago")
     peso = st.number_input("📦 Peso de la carga (kg):", min_value=0.0, step=1.0)
 
@@ -61,42 +74,48 @@ if check_password():
                 km = obtener_distancia(destino)
             
             if km:
-                # 1. Cálculo base (Servicio + Distancia + Peso)
-                costo_servicio = TARIFA_MINIMA + (km * VALOR_KM) + (peso * VALOR_PESO_KG)
-                
-                # 2. Cargo por Combustible (Lo que gasta la N400 en ir y volver)
-                # Multiplicamos por 2 porque la camioneta tiene que volver a base
+                # 1. Cálculo de Bencina (Costo operativo para ti)
                 litros_viaje = (km * 2) / RENDIMIENTO_N400
-                cargo_bencina = litros_viaje * PRECIO_BENCINA
+                costo_bencina = litros_viaje * PRECIO_BENCINA
                 
-                # 3. GRAN TOTAL
-                neto = costo_servicio + cargo_bencina
-                iva = neto * 0.19
-                total_final = neto + iva
+                # 2. Cálculo de Peajes (Reembolso de ida y vuelta)
+                total_peajes = peaje_unitario * 2
+                
+                # 3. Lógica de Cobro al Cliente
+                neto_servicio = TARIFA_MINIMA + (km * VALOR_KM) + (peso * VALOR_PESO_KG)
+                iva = neto_servicio * 0.19
+                
+                # TOTAL FINAL: (Neto + IVA) + Peajes Exentos
+                total_final = neto_servicio + iva + total_peajes
 
-                # INTERFAZ PARA EL GERENTE (Limpia y profesional)
-                st.success(f"Ruta detectada: {km} km")
+                # --- MOSTRAR RESULTADOS ---
+                st.success(f"Distancia detectada: {km} km")
                 
-                # Usamos columnas para que se vea pro
-                col1, col2 = st.columns(2)
-                col1.metric("Costo Bencina (Ida/Vuelta)", f"${cargo_bencina:,.0f}")
-                col2.metric("Total a Cobrar", f"${total_final:,.0f}")
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Gasto Bencina", f"${costo_bencina:,.0f}")
+                c2.metric("Peajes (I/V)", f"${total_peajes:,.0f}")
+                c3.metric("Total a Cobrar", f"${total_final:,.0f}")
 
                 st.markdown(f"""
                 ### 💰 Resumen de Cotización
-                * **Servicio Base + Carga:** ${costo_servicio:,.0f}
-                * **Cargo Combustible (Alza):** ${cargo_bencina:,.0f}
-                * **Valor Neto:** ${neto:,.0f}
+                * **Valor Neto Servicio:** ${neto_servicio:,.0f}
                 * **IVA (19%):** ${iva:,.0f}
-                * **Total Final:** **${total_final:,.0f}**
+                * **Peajes (Reembolso Exento):** ${total_peajes:,.0f}
+                * **Total Final a Pagar:** **${total_final:,.0f}**
                 ---
+                **💡 Mensaje para el cliente:**
+                'El flete sale **${neto_servicio:,.0f} + IVA**, más **${total_peajes:,.0f}** de peajes de carretera.'
                 """)
-                
+
                 # Botones de Navegación
                 st.subheader("🚀 Iniciar Navegación")
                 dest_url = quote(f"{destino}, Chile")
-                c1, c2 = st.columns(2)
-                with c1: st.link_button("📍 Google Maps", f"https://www.google.com/maps/dir/?api=1&origin={quote(DIRECCION_BASE)}&destination={dest_url}")
-                with c2: st.link_button("🚙 Waze", f"https://waze.com/ul?q={dest_url}&navigate=yes")
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.link_button("📍 Google Maps", f"https://www.google.com/maps/dir/?api=1&origin={quote(DIRECCION_BASE)}&destination={dest_url}")
+                with col2:
+                    st.link_button("🚙 Waze", f"https://waze.com/ul?q={dest_url}&navigate=yes")
             else:
-                st.error("Dirección no encontrada.")
+                st.error("No encontré la dirección.")
+        else:
+            st.warning("Escribe un destino.")
