@@ -24,25 +24,28 @@ def check_password():
 if check_password():
     # --- BARRA LATERAL (SIDEBAR) ---
     with st.sidebar:
-        st.header("Menú Principal")
+        st.header("Menú y Extras")
         
-        # Botón de cerrar sesión primero
+        # Botón de cerrar sesión
         if st.button("Cerrar Sesión"):
             st.session_state["password_correct"] = False
             st.rerun()
         
         st.write("---")
         
-        # AQUÍ APARECERÁ EN EL CÍRCULO VERDE QUE MARCASTE
-        st.subheader("Configuración de Peajes")
-        peaje_unitario = st.number_input(
-            "Valor Peaje Unitario ($):", 
-            min_value=0, 
-            step=100, 
-            value=0, 
-            help="Se multiplicará por 2 (ida y vuelta)"
-        )
-        st.info("💡 Este valor se sumará al total como reembolso.")
+        # AQUÍ ESTÁ EL "CHECK" QUE PEDISTE (Círculo verde de la izquierda)
+        activar_peajes = st.checkbox("¿Ruta con Peajes?", value=False)
+        
+        monto_peaje = 0
+        if activar_peajes:
+            # Si el check está activado, aparece el cuadro para los números
+            monto_peaje = st.number_input(
+                "Monto del Peaje ($):", 
+                min_value=0, 
+                step=100, 
+                help="Ingresa el valor de un peaje. La app calculará ida y vuelta."
+            )
+            st.info("💡 Se sumará el doble al total.")
 
     # --- INTERFAZ PRINCIPAL ---
     try:
@@ -53,7 +56,7 @@ if check_password():
     st.title("Calculadora de Fletes Inteligente")
     st.markdown("---")
 
-    # Variables de cobro
+    # Variables de cobro (Ajustadas por alza de bencina)
     DIRECCION_BASE = "Osvaldo Croquevielle 2207, Pudahuel, Chile"
     TARIFA_MINIMA = 15000
     VALOR_KM = 950
@@ -78,38 +81,49 @@ if check_password():
 
     if st.button("CALCULAR AHORA"):
         if destino:
-            with st.spinner('Calculando...'):
+            with st.spinner('Calculando costos...'):
                 km = obtener_distancia(destino)
             
             if km:
-                total_peajes = peaje_unitario * 2
+                # Lógica de Peajes
+                total_peajes = monto_peaje * 2 if activar_peajes else 0
+                
+                # Lógica de Servicio
                 neto_servicio = TARIFA_MINIMA + (km * VALOR_KM) + (peso * VALOR_PESO_KG)
                 iva = neto_servicio * 0.19
+                
+                # Bencina (Tu costo operativo)
+                costo_bencina = ((km * 2) / RENDIMIENTO_N400) * PRECIO_BENCINA
+                
+                # TOTAL FINAL
                 total_final = neto_servicio + iva + total_peajes
 
                 st.success(f"Distancia: {km} km")
                 
-                # Resumen
+                # Métricas rápidas
+                c1, c2 = st.columns(2)
+                c1.metric("Peajes (I/V)", f"${total_peajes:,.0f}")
+                c2.metric("Total Final", f"${total_final:,.0f}")
+
                 st.markdown(f"""
                 ### 💰 Resumen de Cotización
-                * **Valor Neto:** ${neto_servicio:,.0f}
+                * **Neto Servicio:** ${neto_servicio:,.0f}
                 * **IVA (19%):** ${iva:,.0f}
-                * **Peajes (I/V):** ${total_peajes:,.0f}
-                * **Total Final:** **${total_final:,.0f}**
+                * **Peajes (Reembolso):** ${total_peajes:,.0f}
+                * **Total a Cobrar:** **${total_final:,.0f}**
+                ---
                 """)
 
-                # --- SECCIÓN DE NAVEGACIÓN (LOS BOTONES GRANDES ABAJO) ---
-                st.write("---")
+                # NAVEGACIÓN (Botones grandes uno abajo del otro)
                 st.subheader("🚀 Iniciar Navegación")
                 dest_url = quote(f"{destino}, Chile")
                 
-                # Botones uno debajo del otro para que ocupen el ancho y sean fáciles de tocar
-                st.link_button("📍 Abrir en Google Maps", 
+                st.link_button("📍 Google Maps", 
                                f"https://www.google.com/maps/dir/?api=1&origin={quote(DIRECCION_BASE)}&destination={dest_url}", 
                                use_container_width=True)
                 
-                st.link_button("🚙 Abrir en Waze", 
+                st.link_button("🚙 Waze", 
                                f"https://waze.com/ul?q={dest_url}&navigate=yes", 
                                use_container_width=True)
             else:
-                st.error("No encontré la dirección.")
+                st.error("Dirección no encontrada.")
