@@ -3,9 +3,10 @@ import requests
 from geopy.geocoders import Nominatim
 from urllib.parse import quote
 
-# 1. CONFIGURACIÓN
+# 1. CONFIGURACIÓN DE LA PÁGINA
 st.set_page_config(page_title="Via Angel App", page_icon="🚚")
 
+# 2. SISTEMA DE SEGURIDAD
 def check_password():
     if "password_correct" not in st.session_state:
         st.session_state["password_correct"] = False
@@ -22,30 +23,29 @@ def check_password():
     return True
 
 if check_password():
-    # --- BARRA LATERAL (SIDEBAR) ---
+    # --- BARRA LATERAL (Donde marcaste el círculo verde) ---
     with st.sidebar:
-        st.header("Menú y Extras")
+        st.header("Menú y Configuración")
         
-        # Botón de cerrar sesión
         if st.button("Cerrar Sesión"):
             st.session_state["password_correct"] = False
             st.rerun()
         
         st.write("---")
         
-        # AQUÍ ESTÁ EL "CHECK" QUE PEDISTE (Círculo verde de la izquierda)
+        # AQUÍ ESTÁ LO QUE FALTABA:
+        st.subheader("Gastos de Carretera")
         activar_peajes = st.checkbox("¿Ruta con Peajes?", value=False)
         
         monto_peaje = 0
         if activar_peajes:
-            # Si el check está activado, aparece el cuadro para los números
             monto_peaje = st.number_input(
-                "Monto del Peaje ($):", 
+                "Monto de UN peaje ($):", 
                 min_value=0, 
-                step=100, 
-                help="Ingresa el valor de un peaje. La app calculará ida y vuelta."
+                step=100,
+                help="La app calculará Ida y Vuelta automáticamente."
             )
-            st.info("💡 Se sumará el doble al total.")
+            st.info("💡 Se sumará el doble al total final.")
 
     # --- INTERFAZ PRINCIPAL ---
     try:
@@ -56,7 +56,7 @@ if check_password():
     st.title("Calculadora de Fletes Inteligente")
     st.markdown("---")
 
-    # Variables de cobro (Ajustadas por alza de bencina)
+    # Variables de Negocio (Ajustadas)
     DIRECCION_BASE = "Osvaldo Croquevielle 2207, Pudahuel, Chile"
     TARIFA_MINIMA = 15000
     VALOR_KM = 950
@@ -64,12 +64,12 @@ if check_password():
     PRECIO_BENCINA = 1600 
     RENDIMIENTO_N400 = 12 
 
-    destino = st.text_input("📍 Destino de entrega:", placeholder="Ej: San Diego 100, Santiago")
-    peso = st.number_input("📦 Peso de la carga (kg):", min_value=0.0, step=1.0)
+    destino = st.text_input("📍 Destino de entrega:", placeholder="Ej: Quintero, Chile")
+    peso = st.number_input("📦 Peso de la carga (kg):", min_value=0.0, step=1.0, value=10.0)
 
     def obtener_distancia(destino_texto):
         try:
-            geolocator = Nominatim(user_agent="via_angel_pro")
+            geolocator = Nominatim(user_agent="via_angel_pro_v2")
             location = geolocator.geocode(destino_texto + ", Chile")
             if location:
                 url = f"http://router.project-osrm.org/route/v1/driving/-70.7937,-33.3930;{location.longitude},{location.latitude}?overview=false"
@@ -81,49 +81,47 @@ if check_password():
 
     if st.button("CALCULAR AHORA"):
         if destino:
-            with st.spinner('Calculando costos...'):
+            with st.spinner('Calculando costos para ViAngel...'):
                 km = obtener_distancia(destino)
             
             if km:
-                # Lógica de Peajes
+                # 1. Lógica de Peajes
                 total_peajes = monto_peaje * 2 if activar_peajes else 0
                 
-                # Lógica de Servicio
+                # 2. Lógica de Servicio
                 neto_servicio = TARIFA_MINIMA + (km * VALOR_KM) + (peso * VALOR_PESO_KG)
                 iva = neto_servicio * 0.19
                 
-                # Bencina (Tu costo operativo)
-                costo_bencina = ((km * 2) / RENDIMIENTO_N400) * PRECIO_BENCINA
-                
-                # TOTAL FINAL
+                # 3. TOTAL FINAL
                 total_final = neto_servicio + iva + total_peajes
 
-                st.success(f"Distancia: {km} km")
+                st.success(f"Distancia detectada: {km} km")
                 
-                # Métricas rápidas
-                c1, c2 = st.columns(2)
-                c1.metric("Peajes (I/V)", f"${total_peajes:,.0f}")
-                c2.metric("Total Final", f"${total_final:,.0f}")
-
+                # Resumen Estilo Tarjeta
                 st.markdown(f"""
                 ### 💰 Resumen de Cotización
-                * **Neto Servicio:** ${neto_servicio:,.0f}
+                * **Valor Neto:** ${neto_servicio:,.0f}
                 * **IVA (19%):** ${iva:,.0f}
-                * **Peajes (Reembolso):** ${total_peajes:,.0f}
-                * **Total a Cobrar:** **${total_final:,.0f}**
+                * **Peajes (I/V):** ${total_peajes:,.0f}
+                * **Total a pagar:** **${total_final:,.0f}**
+                
                 ---
+                **Dile al cliente:** 'El flete sale ${neto_servicio:,.0f} + IVA + ${total_peajes:,.0f} de peajes.'
                 """)
 
-                # NAVEGACIÓN (Botones grandes uno abajo del otro)
+                # --- NAVEGACIÓN (Botones Grandes abajo) ---
+                st.write("---")
                 st.subheader("🚀 Iniciar Navegación")
                 dest_url = quote(f"{destino}, Chile")
                 
-                st.link_button("📍 Google Maps", 
+                st.link_button("📍 Abrir en Google Maps", 
                                f"https://www.google.com/maps/dir/?api=1&origin={quote(DIRECCION_BASE)}&destination={dest_url}", 
                                use_container_width=True)
                 
-                st.link_button("🚙 Waze", 
+                st.link_button("🚙 Abrir en Waze", 
                                f"https://waze.com/ul?q={dest_url}&navigate=yes", 
                                use_container_width=True)
             else:
-                st.error("Dirección no encontrada.")
+                st.error("No pude encontrar esa dirección. Intenta ser más específica.")
+        else:
+            st.warning("Por favor, ingresa un destino.")
