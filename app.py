@@ -2,6 +2,7 @@ import streamlit as st
 import requests
 from geopy.geocoders import Nominatim
 from urllib.parse import quote
+import math
 
 # 1. CONFIGURACIÓN DE LA APP (Optimizada para celular)
 st.set_page_config(page_title="Via Angel App", page_icon="🚚")
@@ -15,7 +16,6 @@ def check_password():
         st.title("🔐 Acceso Via Angel")
         password_input = st.text_input("Ingresa la clave para entrar", type="password")
         if st.button("Entrar"):
-            # Tu clave actual
             if password_input == "fletesmi": 
                 st.session_state["password_correct"] = True
                 st.rerun()
@@ -29,14 +29,13 @@ if check_password():
     with st.sidebar:
         st.header("Menú ViAngel")
         
-        # Botón de cerrar sesión
         if st.button("Cerrar Sesión"):
             st.session_state["password_correct"] = False
             st.rerun()
         
         st.write("---")
         
-        # SECCIÓN DE PEAJES (Lo que marcaste en el círculo verde)
+        # SECCIÓN DE PEAJES
         st.subheader("Configuración de Peajes")
         activar_peajes = st.checkbox("¿Ruta con Peajes?", value=False)
         
@@ -49,9 +48,16 @@ if check_password():
                 value=0
             )
             st.info("💡 Se cobrará Ida y Vuelta ($" + str(monto_peaje * 2) + ")")
+        
+        st.write("---")
+        
+        # NUEVA SECCIÓN: RECARGO NOCTURNO
+        st.subheader("Horario Especial")
+        activar_nocturno = st.checkbox("¿Requiere Conducción Nocturna?", value=False, help="Aplica recargo por conducir entre las 22:00 y las 06:00 horas.")
+        if activar_nocturno:
+            st.warning("🌙 Modo Nocturno Activado")
 
     # --- CUERPO PRINCIPAL ---
-    # Intentar cargar el logo
     try:
         st.image("logoVA.jpeg", width=220)
     except:
@@ -60,13 +66,19 @@ if check_password():
     st.title("Calculadora de Fletes Inteligente")
     st.markdown("---")
 
-    # VARIABLES DE NEGOCIO (Valores fijos)
+    # VARIABLES DE NEGOCIO BASE (Valores fijos de mercado 2026)
     DIRECCION_BASE = "Osvaldo Croquevielle 2207, Pudahuel, Chile"
-    TARIFA_MINIMA = 15000
-    VALOR_KM = 950
-    VALOR_PESO_KG = 50
-    PRECIO_BENCINA = 1600 # Valor actualizado abril 2026
-    RENDIMIENTO_N400 = 12 # Km/litro promedio cargada
+    PRECIO_BENCINA = 1600 
+
+    # Parámetros para tramos locales (Santiago)
+    BANDERAZO_SANTIAGO = 35000     
+    VALOR_KM_SANTIAGO = 750        
+    VALOR_PESO_KG_SANTIAGO = 50    
+    FACTOR_RECARGO_NOCTURNO_LOCAL = 0.25 # +25% en Santiago
+
+    # Parámetros para regiones (Carretera)
+    VIATICO_FIJO_NOCHE = 40000     
+    TARIFA_PLANA_NOCTURNA_REGION = 50000 # Cargo fijo de $50.000 por noche en carretera
 
     # Entradas de la App
     destino = st.text_input("📍 Destino de entrega:", placeholder="Ej: Quintero, Chile")
@@ -78,10 +90,9 @@ if check_password():
             geolocator = Nominatim(user_agent="via_angel_final_v1")
             location = geolocator.geocode(destino_texto + ", Chile")
             if location:
-                # Coordenadas de Pudahuel (Base) a Destino
-                url = f"http://router.project-osrm.org/route/v1/driving/-70.7937,-33.3930;{location.longitude},{location.latitude}?overview=false"
+                url = f"http://project-osrm.org;{location.longitude},{location.latitude}?overview=false"
                 r = requests.get(url).json()
-                return round(r['routes'][0]['distance'] / 1000, 1)
+                return round(r['routes']['distance'] / 1000, 1)
             return None
         except:
             return None
@@ -93,49 +104,102 @@ if check_password():
                 km = obtener_distancia(destino)
             
             if km:
-                # 1. Cálculos de Costos
                 total_peajes = monto_peaje * 2 if activar_peajes else 0
-                neto_servicio = TARIFA_MINIMA + (km * VALOR_KM) + (peso * VALOR_PESO_KG)
+                monto_nocturno_detalle = 0
+                
+                # --- AJUSTE DINÁMICO POR PESO DE LA CARGA (CUESTAS Y CONSUMO) ---
+                if peso <= 150:
+                    rendimiento_real = 12       
+                    valor_km_regiones_real = 1100  
+                    estado_carga = "Liviana"
+                elif 150 < peso <= 400:
+                    rendimiento_real = 10       
+                    valor_km_regiones_real = 1200  
+                    estado_carga = "Moderada"
+                else:
+                    rendimiento_real = 8        
+                    valor_km_regiones_real = 1350  
+                    estado_carga = "Pesada (Exigencia Máxima)"
+
+                # --- LÓGICA DE CONDICIONAL (SANTIAGO VS REGIONES) ---
+                if km <= 100:
+                    # REGLA LOCAL (URBANO/SANTIAGO)
+                    tipo_viaje = f"Local (Santiago) - Carga {estado_carga}"
+                    neto_servicio = BANDERAZO_SANTIAGO + (km * VALOR_KM_SANTIAGO) + (peso * VALOR_PESO_KG_SANTIAGO)
+                    viaticos_totales = 0
+                    
+                    # Aplicar recargo nocturno local si está activo (+25%)
+                    if activar_nocturno:
+                        monto_nocturno_detalle = neto_servicio * FACTOR_RECARGO_NOCTURNO_LOCAL
+                        neto_servicio += monto_nocturno_detalle
+                else:
+                    # REGLA INTERREGIONAL (VIAJES LARGOS)
+                    tipo_viaje = f"Interregional (Regiones) - Carga {estado_carga}"
+                    neto_servicio = km * valor_km_regiones_real
+                    
+                    # Calcula las noches en ruta (1 noche cada 700 km de ida)
+                    noches_calculadas = math.floor(km / 700)
+                    if noches_calculadas < 1:
+                        noches_calculadas = 1
+                    
+                    viaticos_totales = noches_calculadas * VIATICO_FIJO_NOCHE
+                    neto_servicio += viaticos_totales
+                    
+                    # Aplicar tarifa plana nocturna regional si está activo
+                    if activar_nocturno:
+                        monto_nocturno_detalle = TARIFA_PLANA_NOCTURNA_REGION
+                        neto_servicio += monto_nocturno_detalle
+
+                # IVA
                 iva = neto_servicio * 0.19
                 
-                # Bencina (Tu gasto de bolsillo para saber cuánto ganas)
-                costo_bencina = ((km * 2) / RENDIMIENTO_N400) * PRECIO_BENCINA
+                # Bencina real estimada ida y vuelta usando el rendimiento castigado por peso
+                costo_bencina = ((km * 2) / rendimiento_real) * PRECIO_BENCINA
                 
                 # TOTAL FINAL
                 total_final = neto_servicio + iva + total_peajes
 
                 # --- MOSTRAR RESULTADOS ---
+                st.info(f"Segmento de viaje: **{tipo_viaje}**")
+                if activar_nocturno:
+                    st.warning(f"🌙 El precio incluye recargo nocturno aplicado.")
                 st.success(f"Distancia detectada: {km} km")
                 
                 # Métricas destacadas
                 c1, c2, c3 = st.columns(3)
-                c1.metric("Bencina (Gasto)", f"${costo_bencina:,.0f}")
-                c2.metric("Peajes (I/V)", f"${total_peajes:,.0f}")
-                c3.metric("Total Cobro", f"${total_final:,.0f}")
+                c1.metric("Bencina Estimada (I/V)", f"${costo_bencina:,.0f}")
+                if km > 100:
+                    c2.metric("Viáticos Incluidos", f"${viaticos_totales:,.0f}")
+                else:
+                    c2.metric("Peajes Reembolso", f"${total_peajes:,.0f}")
+                c3.metric("Total Bruto", f"${total_final:,.0f}")
 
                 st.markdown(f"""
-                ### 💰 Resumen de Cotización
-                * **Valor Neto:** ${neto_servicio:,.0f}
+                ### 💰 Resumen de Cotización Viangel
+                * **Tipo de Carga:** Carga {estado_carga} ({peso} kg)
+                * **Valor Neto Servicio:** ${neto_servicio:,.0f} 
+                {"*(Incluye recargo nocturno de $" + f"{monto_nocturno_detalle:,.0f}" + ")*" if activar_nocturno else ""}
                 * **IVA (19%):** ${iva:,.0f}
-                * **Peajes (Reembolso):** ${total_peajes:,.0f}
-                * **Total Final a Pagar:** **${total_final:,.0f}**
+                * **Peajes:** ${total_peajes:,.0f}
+                * **Total Final a Pagar (Factura):** **${total_final:,.0f}**
                 ---
-                **Dile al cliente:** 'El servicio es de ${neto_servicio:,.0f} + IVA. Adicionalmente se cobran ${total_peajes:,.0f} por peajes de ida y vuelta.'
+                **Mensaje para el cliente:** 
+                'El servicio exclusivo tiene un valor de **${neto_servicio:,.0f} + IVA**. Adicionalmente, se consideran **${total_peajes:,.0f}** correspondientes a peajes obligatorios de la ruta.'
                 """)
 
-                # --- NAVEGACIÓN (Botones anchos abajo) ---
+                # --- NAVEGACIÓN ---
                 st.write("---")
                 st.subheader("🚀 Iniciar Navegación")
                 dest_url = quote(f"{destino}, Chile")
                 
                 # Google Maps
                 st.link_button("📍 Abrir en Google Maps", 
-                               f"https://www.google.com/maps/dir/?api=1&origin={quote(DIRECCION_BASE)}&destination={dest_url}", 
+                               f"https://google.com{quote(DIRECCION_BASE)}&destination={dest_url}", 
                                use_container_width=True)
                 
                 # Waze
                 st.link_button("🚙 Abrir en Waze", 
-                               f"https://waze.com/ul?q={dest_url}&navigate=yes", 
+                               f"https://waze.com{dest_url}&navigate=yes", 
                                use_container_width=True)
             else:
                 st.error("No se encontró la dirección. Intenta escribirla más completa.")
