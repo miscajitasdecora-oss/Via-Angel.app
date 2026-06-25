@@ -3,6 +3,7 @@ import requests
 from geopy.geocoders import Nominatim
 from urllib.parse import quote
 import math
+import random
 
 # 1. CONFIGURACIÓN DE LA APP (Optimizada para celular)
 st.set_page_config(page_title="Via Angel App", page_icon="🚚")
@@ -51,7 +52,7 @@ if check_password():
         
         st.write("---")
         
-        # NUEVA SECCIÓN: RECARGO NOCTURNO
+        # RECARGO NOCTURNO
         st.subheader("Horario Especial")
         activar_nocturno = st.checkbox("¿Requiere Conducción Nocturna?", value=False, help="Aplica recargo por conducir entre las 22:00 y las 06:00 horas.")
         if activar_nocturno:
@@ -74,40 +75,52 @@ if check_password():
     BANDERAZO_SANTIAGO = 35000     
     VALOR_KM_SANTIAGO = 750        
     VALOR_PESO_KG_SANTIAGO = 50    
-    FACTOR_RECARGO_NOCTURNO_LOCAL = 0.25 # +25% en Santiago
+    FACTOR_RECARGO_NOCTURNO_LOCAL = 0.25 
 
     # Parámetros para regiones (Carretera)
     VIATICO_FIJO_NOCHE = 40000     
-    TARIFA_PLANA_NOCTURNA_REGION = 50000 # Cargo fijo de $50.000 por noche en carretera
+    TARIFA_PLANA_NOCTURNA_REGION = 50000 
 
     # Entradas de la App
     destino = st.text_input("📍 Destino de entrega:", placeholder="Ej: Quintero, Chile")
     peso = st.number_input("📦 Peso de la carga (kg):", min_value=0.0, step=1.0, value=10.0)
 
-    # Función de cálculo de distancia (OSRM)
+    # --- FUNCIÓN DE MAPA CORREGIDA Y BLINDADA CONTRA BLOQUEOS ---
     def obtener_distancia(destino_texto):
         try:
-            geolocator = Nominatim(user_agent="via_angel_final_v1")
-            location = geolocator.geocode(destino_texto + ", Chile")
+            # Generamos un agente aleatorio único cada vez para evitar que el servidor de mapas nos bloquee por IP o nombre
+            id_aleatorio = random.randint(1000, 9999)
+            geolocator = Nominatim(user_agent=f"via_angel_final_prod_{id_aleatorio}", timeout=10)
+            
+            # Limpiamos el texto para asegurar una mejor búsqueda en Chile
+            busqueda = f"{destino_texto.strip()}, Chile"
+            location = geolocator.geocode(busqueda)
+            
+            # Si falla el primer intento, probamos buscando solo el texto ingresado por el usuario sin forzar el ", Chile"
+            if not location:
+                location = geolocator.geocode(destino_texto.strip())
+                
             if location:
+                # Consulta al servidor de rutas OSRM usando las coordenadas encontradas
                 url = f"http://project-osrm.org;{location.longitude},{location.latitude}?overview=false"
-                r = requests.get(url).json()
-                return round(r['routes']['distance'] / 1000, 1)
+                r = requests.get(url, timeout=10).json()
+                if 'routes' in r and len(r['routes']) > 0:
+                    return round(r['routes'][0]['distance'] / 1000, 1)
             return None
-        except:
+        except Exception as e:
             return None
 
     # BOTÓN DE CÁLCULO
     if st.button("CALCULAR AHORA"):
         if destino:
-            with st.spinner('Procesando ruta...'):
+            with st.spinner('Procesando ruta en tiempo real...'):
                 km = obtener_distancia(destino)
             
             if km:
                 total_peajes = monto_peaje * 2 if activar_peajes else 0
                 monto_nocturno_detalle = 0
                 
-                # --- AJUSTE DINÁMICO POR PESO DE LA CARGA (CUESTAS Y CONSUMO) ---
+                # --- AJUSTE DINÁMICO POR PESO DE LA CARGA ---
                 if peso <= 150:
                     rendimiento_real = 12       
                     valor_km_regiones_real = 1100  
@@ -123,21 +136,17 @@ if check_password():
 
                 # --- LÓGICA DE CONDICIONAL (SANTIAGO VS REGIONES) ---
                 if km <= 100:
-                    # REGLA LOCAL (URBANO/SANTIAGO)
                     tipo_viaje = f"Local (Santiago) - Carga {estado_carga}"
                     neto_servicio = BANDERAZO_SANTIAGO + (km * VALOR_KM_SANTIAGO) + (peso * VALOR_PESO_KG_SANTIAGO)
                     viaticos_totales = 0
                     
-                    # Aplicar recargo nocturno local si está activo (+25%)
                     if activar_nocturno:
                         monto_nocturno_detalle = neto_servicio * FACTOR_RECARGO_NOCTURNO_LOCAL
                         neto_servicio += monto_nocturno_detalle
                 else:
-                    # REGLA INTERREGIONAL (VIAJES LARGOS)
                     tipo_viaje = f"Interregional (Regiones) - Carga {estado_carga}"
                     neto_servicio = km * valor_km_regiones_real
                     
-                    # Calcula las noches en ruta (1 noche cada 700 km de ida)
                     noches_calculadas = math.floor(km / 700)
                     if noches_calculadas < 1:
                         noches_calculadas = 1
@@ -145,7 +154,6 @@ if check_password():
                     viaticos_totales = noches_calculadas * VIATICO_FIJO_NOCHE
                     neto_servicio += viaticos_totales
                     
-                    # Aplicar tarifa plana nocturna regional si está activo
                     if activar_nocturno:
                         monto_nocturno_detalle = TARIFA_PLANA_NOCTURNA_REGION
                         neto_servicio += monto_nocturno_detalle
@@ -153,7 +161,7 @@ if check_password():
                 # IVA
                 iva = neto_servicio * 0.19
                 
-                # Bencina real estimada ida y vuelta usando el rendimiento castigado por peso
+                # Bencina
                 costo_bencina = ((km * 2) / rendimiento_real) * PRECIO_BENCINA
                 
                 # TOTAL FINAL
@@ -165,7 +173,6 @@ if check_password():
                     st.warning(f"🌙 El precio incluye recargo nocturno aplicado.")
                 st.success(f"Distancia detectada: {km} km")
                 
-                # Métricas destacadas
                 c1, c2, c3 = st.columns(3)
                 c1.metric("Bencina Estimada (I/V)", f"${costo_bencina:,.0f}")
                 if km > 100:
@@ -192,16 +199,14 @@ if check_password():
                 st.subheader("🚀 Iniciar Navegación")
                 dest_url = quote(f"{destino}, Chile")
                 
-                # Google Maps
                 st.link_button("📍 Abrir en Google Maps", 
                                f"https://google.com{quote(DIRECCION_BASE)}&destination={dest_url}", 
                                use_container_width=True)
                 
-                # Waze
                 st.link_button("🚙 Abrir en Waze", 
                                f"https://waze.com{dest_url}&navigate=yes", 
                                use_container_width=True)
             else:
-                st.error("No se encontró la dirección. Intenta escribirla más completa.")
+                st.error("Error de conexión con el mapa. Intenta escribir la ciudad y la comuna más claro (Ej: 'Iquique' o 'Lebu, Biobio').")
         else:
             st.warning("Escribe una dirección de destino primero.")
